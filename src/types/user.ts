@@ -23,3 +23,16 @@ export interface UserQueryParams extends ListQueryParams {
   /** 搜索关键词（匹配用户名 / 邮箱） */
   keyword?: string;
 }
+
+/** 新增用户参数 */
+export interface CreateUserParams {
+  username: string;
+  email: string;
+  role: UserRole;
+  status: UserStatus;
+}
+
+/** 编辑用户参数 */
+export interface UpdateUserParams extends CreateUserParams {
+  id: number;
+}
