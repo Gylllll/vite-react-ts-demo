@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { PaginatedData } from '../types/common.ts';
 import type { User, UserStatus, UserRole, CreateUserParams } from '../types/user.ts';
 import { getUserList, createUser, updateUser, deleteUser } from '../api/user.ts';
+import { Table, Pagination, Modal } from '../components/atom/index.ts';
+import type { Column } from '../components/atom/index.ts';
 
 const PAGE_SIZE = 10;
 
@@ -55,27 +57,6 @@ const INITIAL_FORM: CreateUserParams = {
   status: 'active',
 };
 
-/**
- * 生成可见页码（带省略号）
- */
-function getPageNumbers(current: number, total: number): (number | '...')[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-
-  const pages: (number | '...')[] = [1];
-
-  if (current > 3) pages.push('...');
-
-  const start = Math.max(2, current - 1);
-  const end = Math.min(total - 1, current + 1);
-  for (let i = start; i <= end; i++) {
-    pages.push(i);
-  }
-
-  if (current < total - 2) pages.push('...');
-
-  pages.push(total);
-  return pages;
-}
 
 const UserListPage: React.FC = () => {
   const [keyword, setKeyword] = useState('');
@@ -95,6 +76,57 @@ const UserListPage: React.FC = () => {
   // ----- 删除确认弹窗状态 -----
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // ----- 表格列定义（依赖组件内回调） -----
+  const columns: Column<User>[] = useMemo(
+    () => [
+      { key: 'id', title: 'ID', className: 'text-gray-500' },
+      { key: 'username', title: '用户名', className: 'font-medium text-gray-800' },
+      { key: 'email', title: '邮箱', className: 'text-gray-600' },
+      {
+        key: 'role',
+        title: '角色',
+        render: (user) => (
+          <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${ROLE_STYLE[user.role]}`}>
+            {ROLE_LABEL[user.role]}
+          </span>
+        ),
+      },
+      {
+        key: 'status',
+        title: '状态',
+        render: (user) => (
+          <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_STYLE[user.status]}`}>
+            {STATUS_LABEL[user.status]}
+          </span>
+        ),
+      },
+      { key: 'createdAt', title: '创建时间', className: 'text-gray-500' },
+      {
+        key: 'actions',
+        title: '操作',
+        render: (user) => (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded px-2.5 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 transition-colors cursor-pointer"
+              onClick={() => openEditModal(user)}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              className="rounded px-2.5 py-1 text-xs font-medium text-red-500 hover:bg-red-50 transition-colors cursor-pointer"
+              onClick={() => openDeleteConfirm(user)}
+            >
+              删除
+            </button>
+          </div>
+        ),
+      },
+    ],
+    [], // eslint-disable-line react-hooks/exhaustive-deps -- 回调函数引用稳定
+  );
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -120,12 +152,6 @@ const UserListPage: React.FC = () => {
   const handleSearch = () => {
     setSearchKeyword(keyword.trim());
     setPage(1);
-  };
-
-  const handlePageChange = (nextPage: number) => {
-    const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
-    if (nextPage < 1 || nextPage > totalPages) return;
-    setPage(nextPage);
   };
 
   // ----- 新增/编辑弹窗 -----
@@ -223,103 +249,11 @@ const UserListPage: React.FC = () => {
     }
   };
 
-  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
-  const pageNumbers = getPageNumbers(page, totalPages);
-
-  /** 渲染表格内容 */
-  const renderTableBody = () => {
-    if (loading) {
-      return (
-        <tr>
-          <td colSpan={7} className="px-6 py-16 text-center text-gray-400">
-            <div className="flex items-center justify-center gap-2">
-              <svg className="h-5 w-5 animate-spin text-purple-500" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              加载中...
-            </div>
-          </td>
-        </tr>
-      );
-    }
-
-    if (error) {
-      return (
-        <tr>
-          <td colSpan={7} className="px-6 py-16 text-center">
-            <p className="text-red-500">{error}</p>
-            <button
-              type="button"
-              className="mt-3 rounded bg-purple-500 px-4 py-2 text-sm text-white hover:bg-purple-600 transition-colors cursor-pointer"
-              onClick={() => void fetchData()}
-            >
-              重新加载
-            </button>
-          </td>
-        </tr>
-      );
-    }
-
-    if (!data || data.list.length === 0) {
-      return (
-        <tr>
-          <td colSpan={7} className="px-6 py-16 text-center text-gray-400">
-            {searchKeyword ? (
-              <>
-                <p>未搜索到与「{searchKeyword}」相关的用户</p>
-                <button
-                  type="button"
-                  className="mt-3 text-purple-500 hover:text-purple-600 cursor-pointer"
-                  onClick={() => { setKeyword(''); setSearchKeyword(''); setPage(1); }}
-                >
-                  清除搜索
-                </button>
-              </>
-            ) : (
-              <p>暂无用户数据</p>
-            )}
-          </td>
-        </tr>
-      );
-    }
-
-    return data.list.map((user) => (
-      <tr key={user.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-        <td className="px-6 py-3 text-sm text-gray-500">{user.id}</td>
-        <td className="px-6 py-3 text-sm font-medium text-gray-800">{user.username}</td>
-        <td className="px-6 py-3 text-sm text-gray-600">{user.email}</td>
-        <td className="px-6 py-3">
-          <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${ROLE_STYLE[user.role]}`}>
-            {ROLE_LABEL[user.role]}
-          </span>
-        </td>
-        <td className="px-6 py-3">
-          <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_STYLE[user.status]}`}>
-            {STATUS_LABEL[user.status]}
-          </span>
-        </td>
-        <td className="px-6 py-3 text-sm text-gray-500">{user.createdAt}</td>
-        <td className="px-6 py-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="rounded px-2.5 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 transition-colors cursor-pointer"
-              onClick={() => openEditModal(user)}
-            >
-              编辑
-            </button>
-            <button
-              type="button"
-              className="rounded px-2.5 py-1 text-xs font-medium text-red-500 hover:bg-red-50 transition-colors cursor-pointer"
-              onClick={() => openDeleteConfirm(user)}
-            >
-              删除
-            </button>
-          </div>
-        </td>
-      </tr>
-    ));
+  /** 清空搜索 */
+  const clearSearch = () => {
+    setKeyword('');
+    setSearchKeyword('');
+    setPage(1);
   };
 
   return (
@@ -368,221 +302,149 @@ const UserListPage: React.FC = () => {
         </div>
 
         {/* 表格 */}
-        <div className="mt-6 overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用户名</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">邮箱</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">角色</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">创建时间</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {renderTableBody()}
-              </tbody>
-            </table>
-          </div>
+        <div className="mt-6">
+          <Table<User>
+            columns={columns}
+            data={data?.list ?? []}
+            loading={loading}
+            error={error}
+            onRetry={() => void fetchData()}
+            rowKey={(user) => user.id}
+            emptyContent={
+              searchKeyword ? (
+                <>
+                  <p>未搜索到与「{searchKeyword}」相关的用户</p>
+                  <button
+                    type="button"
+                    className="mt-3 text-purple-500 hover:text-purple-600 cursor-pointer"
+                    onClick={clearSearch}
+                  >
+                    清除搜索
+                  </button>
+                </>
+              ) : (
+                <p>暂无用户数据</p>
+              )
+            }
+          />
         </div>
 
         {/* 分页栏 */}
         {data && data.total > 0 && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <span className="text-sm text-gray-500">
-              第 {(page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, data.total)} 条 / 共 {data.total} 条
-            </span>
-
-            <div className="flex items-center gap-1">
-              {/* 上一页 */}
-              <button
-                type="button"
-                className="rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                disabled={page <= 1}
-                onClick={() => handlePageChange(page - 1)}
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-
-              {/* 页码 */}
-              {pageNumbers.map((p, idx) =>
-                p === '...' ? (
-                  <span key={`ellipsis-${idx}`} className="px-2 py-2 text-sm text-gray-400 select-none">
-                    ...
-                  </span>
-                ) : (
-                  <button
-                    key={p}
-                    type="button"
-                    className={`min-w-[36px] rounded-lg px-2 py-2 text-sm transition-colors cursor-pointer ${
-                      p === page
-                        ? 'bg-purple-500 text-white'
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                    onClick={() => handlePageChange(p)}
-                  >
-                    {p}
-                  </button>
-                ),
-              )}
-
-              {/* 下一页 */}
-              <button
-                type="button"
-                className="rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                disabled={page >= totalPages}
-                onClick={() => handlePageChange(page + 1)}
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-            </div>
-          </div>
+          <Pagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={data.total}
+            onChange={setPage}
+          />
         )}
       </div>
 
       {/* ==================== 新增/编辑弹窗 ==================== */}
-      {modalVisible && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* 遮罩层 */}
-          <div
-            className="absolute inset-0 bg-black/40 transition-opacity"
-            onClick={closeModal}
-          />
-
-          {/* 弹窗卡片 */}
-          <div className="relative z-10 mx-4 w-full max-w-md rounded-xl bg-white shadow-2xl">
-            {/* 标题栏 */}
-            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
-              <h3 className="text-lg font-semibold text-gray-800">
-                {editingUser ? '编辑用户' : '新增用户'}
-              </h3>
-              <button
-                type="button"
-                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors cursor-pointer"
-                onClick={closeModal}
-                disabled={submitting}
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* 表单 */}
-            <div className="px-6 py-4 space-y-4">
-              {/* 用户名 */}
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                  用户名 <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 placeholder-gray-400 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
-                  placeholder="请输入用户名"
-                  value={formData.username}
-                  onChange={(e) => handleFormChange('username', e.target.value)}
-                  disabled={submitting}
-                />
-              </div>
-
-              {/* 邮箱 */}
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                  邮箱 <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="email"
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 placeholder-gray-400 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
-                  placeholder="请输入邮箱"
-                  value={formData.email}
-                  onChange={(e) => handleFormChange('email', e.target.value)}
-                  disabled={submitting}
-                />
-              </div>
-
-              {/* 角色 */}
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">角色</label>
-                <select
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
-                  value={formData.role}
-                  onChange={(e) => handleFormChange('role', e.target.value)}
-                  disabled={submitting}
-                >
-                  {ROLE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 状态 */}
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">状态</label>
-                <select
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
-                  value={formData.status}
-                  onChange={(e) => handleFormChange('status', e.target.value)}
-                  disabled={submitting}
-                >
-                  {STATUS_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 错误提示 */}
-              {formError && (
-                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-500">{formError}</p>
-              )}
-            </div>
-
-            {/* 底部按钮 */}
-            <div className="flex justify-end gap-3 border-t border-gray-100 px-6 py-4">
-              <button
-                type="button"
-                className="rounded-lg border border-gray-200 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={closeModal}
-                disabled={submitting}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="rounded-lg bg-purple-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={() => void handleFormSubmit()}
-                disabled={submitting}
-              >
-                {submitting ? '保存中...' : '保存'}
-              </button>
-            </div>
+      <Modal
+        visible={modalVisible}
+        title={editingUser ? '编辑用户' : '新增用户'}
+        onClose={closeModal}
+        loading={submitting}
+        footer={
+          <>
+            <button
+              type="button"
+              className="rounded-lg border border-gray-200 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={closeModal}
+              disabled={submitting}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="rounded-lg bg-purple-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => void handleFormSubmit()}
+              disabled={submitting}
+            >
+              {submitting ? '保存中...' : '保存'}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {/* 用户名 */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">
+              用户名 <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="text"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 placeholder-gray-400 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+              placeholder="请输入用户名"
+              value={formData.username}
+              onChange={(e) => handleFormChange('username', e.target.value)}
+              disabled={submitting}
+            />
           </div>
+
+          {/* 邮箱 */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">
+              邮箱 <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="email"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 placeholder-gray-400 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+              placeholder="请输入邮箱"
+              value={formData.email}
+              onChange={(e) => handleFormChange('email', e.target.value)}
+              disabled={submitting}
+            />
+          </div>
+
+          {/* 角色 */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">角色</label>
+            <select
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
+              value={formData.role}
+              onChange={(e) => handleFormChange('role', e.target.value)}
+              disabled={submitting}
+            >
+              {ROLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 状态 */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">状态</label>
+            <select
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
+              value={formData.status}
+              onChange={(e) => handleFormChange('status', e.target.value)}
+              disabled={submitting}
+            >
+              {STATUS_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 错误提示 */}
+          {formError && (
+            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-500">{formError}</p>
+          )}
         </div>
-      )}
+      </Modal>
 
       {/* ==================== 删除确认弹窗 ==================== */}
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* 遮罩层 */}
-          <div
-            className="absolute inset-0 bg-black/40 transition-opacity"
-            onClick={() => { if (!deleting) setDeleteTarget(null); }}
-          />
-
-          {/* 弹窗卡片 */}
-          <div className="relative z-10 mx-4 w-full max-w-sm rounded-xl bg-white shadow-2xl">
-            {/* 标题栏 */}
-            <div className="flex items-center gap-3 border-b border-gray-100 px-6 py-4">
+      <Modal
+        visible={!!deleteTarget}
+        title={
+          deleteTarget ? (
+            <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100">
                 <svg className="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
@@ -595,29 +457,33 @@ const UserListPage: React.FC = () => {
                 </p>
               </div>
             </div>
-
-            {/* 底部按钮 */}
-            <div className="flex justify-end gap-3 px-6 py-4">
-              <button
-                type="button"
-                className="rounded-lg border border-gray-200 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={() => setDeleteTarget(null)}
-                disabled={deleting}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="rounded-lg bg-red-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-red-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={() => void handleDeleteConfirm()}
-                disabled={deleting}
-              >
-                {deleting ? '删除中...' : '确认删除'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          ) : null
+        }
+        onClose={() => { if (!deleting) setDeleteTarget(null); }}
+        loading={deleting}
+        footer={
+          <>
+            <button
+              type="button"
+              className="rounded-lg border border-gray-200 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleting}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="rounded-lg bg-red-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-red-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => void handleDeleteConfirm()}
+              disabled={deleting}
+            >
+              {deleting ? '删除中...' : '确认删除'}
+            </button>
+          </>
+        }
+      >
+        {/* 删除确认弹窗的内容已整合到 title 中（图标 + 文字布局） */}
+      </Modal>
     </main>
   );
 };
