@@ -12,8 +12,14 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
   server: {
-    port: 3000, // 指定端口
-    open: true, // 启动自动打开浏览器
-    strictPort: true, // 【可选】端口被占用时直接报错，不会自动换端口
+    port: 5173,
+    open: true,
+    strictPort: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+    },
   },
 });
