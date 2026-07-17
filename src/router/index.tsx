@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import App from '../App.tsx';
 
 const HomePage = lazy(() => import('../pages/HomePage.tsx'));
+const UserListPage = lazy(() => import('../pages/UserListPage.tsx'));
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage.tsx'));
 
 /** 路由加载时的 fallback */
@@ -22,6 +23,7 @@ const RouterComp: React.FC = () => {
         <Routes>
           <Route element={<App />}>
             <Route index element={<HomePage />} />
+            <Route path="user/list" element={<UserListPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
