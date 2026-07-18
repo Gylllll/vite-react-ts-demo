@@ -1,5 +1,6 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { ApiResponse } from '../types/common.ts';
+import { loadingManager } from '../utils/loading.ts';
 
 /** 业务错误码映射为可读信息 */
 const BUSINESS_ERROR_MAP: Record<number, string> = {
@@ -21,12 +22,16 @@ const http = axios.create({
 // ---------- 请求拦截器 ----------
 http.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    loadingManager.show();
     // 可在此注入 token
     // const token = getToken();
     // if (token) config.headers.Authorization = `Bearer ${token}`;
     return config;
   },
-  (error: AxiosError) => Promise.reject(error),
+  (error: AxiosError) => {
+    loadingManager.hide();
+    return Promise.reject(error);
+  },
 );
 
 // ---------- 响应拦截器 ----------
@@ -37,12 +42,15 @@ http.interceptors.response.use(
     // 业务错误（code !== 0 或 200 均视业务约定调整）
     if (body.code !== 0 && body.code !== 200) {
       console.error(`[API Error] ${body.code}: ${body.message}`);
+      loadingManager.hide();
       return Promise.reject(new Error(body.message || '接口异常'));
     }
 
+    loadingManager.hide();
     return response;
   },
   (error: AxiosError) => {
+    loadingManager.hide();
     const status = error.response?.status;
 
     if (status) {
