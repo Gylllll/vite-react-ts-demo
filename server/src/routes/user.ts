@@ -18,6 +18,7 @@ let nextId = ALL_USERS.length + 1;
  *   page      - 页码（默认 1）
  *   pageSize  - 每页条数（默认 10）
  *   keyword   - 搜索关键词（匹配 username / email）
+ *   status    - 状态筛选（active / inactive / banned）
  *   sortField - 排序字段
  *   sortOrder - 排序方向（asc / desc）
  */
@@ -27,6 +28,7 @@ router.get('/user/list', (req: Request, res: Response) => {
   const keyword = (req.query.keyword as string)?.trim();
   const sortField = req.query.sortField as string | undefined;
   const sortOrder = req.query.sortOrder as 'asc' | 'desc' | undefined;
+  const status = req.query.status as string | undefined;
 
   // 1. 关键词筛选
   let filtered = keyword
@@ -34,6 +36,11 @@ router.get('/user/list', (req: Request, res: Response) => {
         (u) => u.username.includes(keyword) || u.email.toLowerCase().includes(keyword.toLowerCase()),
       )
     : [...ALL_USERS];
+
+  // 1.5 状态筛选
+  if (status && ['active', 'inactive', 'banned'].includes(status)) {
+    filtered = filtered.filter((u) => u.status === status);
+  }
 
   // 2. 排序
   if (sortField && (sortField === 'id' || sortField === 'createdAt' || sortField === 'username')) {
@@ -74,7 +81,7 @@ router.get('/user/list', (req: Request, res: Response) => {
  *   status   - 状态（必填）
  */
 router.post('/user', (req: Request, res: Response) => {
-  const { username, email, role, status } = req.body;
+  const { username, email, phone, role, status } = req.body;
 
   // 参数校验
   if (!username?.trim() || !email?.trim()) {
@@ -105,6 +112,7 @@ router.post('/user', (req: Request, res: Response) => {
     id: nextId++,
     username: username.trim(),
     email: email.trim(),
+    phone: phone?.trim() || undefined,
     role,
     status,
     createdAt: dateStr,
@@ -137,7 +145,7 @@ router.put('/user/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { username, email, role, status } = req.body;
+  const { username, email, phone, role, status } = req.body;
 
   if (username !== undefined) {
     if (!String(username).trim()) {
@@ -155,6 +163,10 @@ router.put('/user/:id', (req: Request, res: Response) => {
       return;
     }
     user.email = String(email).trim();
+  }
+
+  if (phone !== undefined) {
+    user.phone = phone ? String(phone).trim() : undefined;
   }
 
   if (role !== undefined) {

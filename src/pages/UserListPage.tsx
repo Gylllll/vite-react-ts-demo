@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { PaginatedData } from '../types/common.ts';
 import type { User, UserStatus, UserRole, CreateUserParams } from '../types/user.ts';
 import { getUserList, createUser, updateUser, deleteUser } from '../api/user.ts';
+import { isValidPhone } from '../utils/validate.ts';
 import { Table, Pagination, Modal } from '../components/atom/index.ts';
 import type { Column } from '../components/atom/index.ts';
 
@@ -53,6 +54,7 @@ const STATUS_OPTIONS: { value: UserStatus; label: string }[] = [
 const INITIAL_FORM: CreateUserParams = {
   username: '',
   email: '',
+  phone: '',
   role: 'viewer',
   status: 'active',
 };
@@ -61,6 +63,8 @@ const INITIAL_FORM: CreateUserParams = {
 const UserListPage: React.FC = () => {
   const [keyword, setKeyword] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState<UserStatus | ''>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | ''>('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<PaginatedData<User> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -83,6 +87,12 @@ const UserListPage: React.FC = () => {
       { key: 'id', title: 'ID', className: 'text-gray-500' },
       { key: 'username', title: '用户名', className: 'font-medium text-gray-800' },
       { key: 'email', title: '邮箱', className: 'text-gray-600' },
+      {
+        key: 'phone',
+        title: '手机号',
+        className: 'text-gray-500',
+        render: (user) => user.phone || '-',
+      },
       {
         key: 'role',
         title: '角色',
@@ -136,6 +146,9 @@ const UserListPage: React.FC = () => {
         page,
         pageSize: PAGE_SIZE,
         keyword: searchKeyword || undefined,
+        status: statusFilter || undefined,
+        sortField: sortOrder ? 'createdAt' : undefined,
+        sortOrder: sortOrder || undefined,
       });
       setData(res.data);
     } catch (err) {
@@ -143,7 +156,7 @@ const UserListPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, searchKeyword]);
+  }, [page, searchKeyword, statusFilter, sortOrder]);
 
   useEffect(() => {
     void fetchData();
@@ -170,6 +183,7 @@ const UserListPage: React.FC = () => {
     setFormData({
       username: user.username,
       email: user.email,
+      phone: user.phone ?? '',
       role: user.role,
       status: user.status,
     });
@@ -204,6 +218,10 @@ const UserListPage: React.FC = () => {
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
       setFormError('请输入有效的邮箱地址');
+      return;
+    }
+    if (formData.phone && !isValidPhone(formData.phone)) {
+      setFormError('请输入有效的手机号');
       return;
     }
 
@@ -301,6 +319,34 @@ const UserListPage: React.FC = () => {
           </button>
         </div>
 
+        {/* 筛选 & 排序 */}
+        <div className="mt-4 flex gap-3">
+          {/* 状态筛选 */}
+          <select
+            className="rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value as UserStatus | ''); setPage(1); }}
+          >
+            <option value="">全部状态</option>
+            {STATUS_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+
+          {/* 创建时间排序 */}
+          <select
+            className="rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
+            value={sortOrder}
+            onChange={(e) => { setSortOrder(e.target.value as 'asc' | 'desc' | ''); setPage(1); }}
+          >
+            <option value="">默认排序</option>
+            <option value="desc">创建时间 ↓ (新→旧)</option>
+            <option value="asc">创建时间 ↑ (旧→新)</option>
+          </select>
+        </div>
+
         {/* 表格 */}
         <div className="mt-6">
           <Table<User>
@@ -394,6 +440,19 @@ const UserListPage: React.FC = () => {
               placeholder="请输入邮箱"
               value={formData.email}
               onChange={(e) => handleFormChange('email', e.target.value)}
+              disabled={submitting}
+            />
+          </div>
+
+          {/* 手机号 */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">手机号</label>
+            <input
+              type="tel"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 placeholder-gray-400 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+              placeholder="请输入手机号（选填）"
+              value={formData.phone ?? ''}
+              onChange={(e) => handleFormChange('phone', e.target.value)}
               disabled={submitting}
             />
           </div>

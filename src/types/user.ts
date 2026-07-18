@@ -11,6 +11,7 @@ export interface User {
   id: number;
   username: string;
   email: string;
+  phone?: string;
   role: UserRole;
   status: UserStatus;
   avatar?: string;
@@ -22,12 +23,15 @@ export interface User {
 export interface UserQueryParams extends ListQueryParams {
   /** 搜索关键词（匹配用户名 / 邮箱） */
   keyword?: string;
+  /** 按状态筛选 */
+  status?: UserStatus;
 }
 
 /** 新增用户参数 */
 export interface CreateUserParams {
   username: string;
   email: string;
+  phone?: string;
   role: UserRole;
   status: UserStatus;
 }

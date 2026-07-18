@@ -29,10 +29,14 @@ export function generateMockUsers(): User[] {
     const day = String(d.getDate()).padStart(2, '0');
     const dateStr = `${y}-${m}-${day}`;
 
+    // 生成模拟手机号：138 开头 + 8 位序号补零
+    const phone = `138${String(id).padStart(8, '0')}`;
+
     return {
       id,
       username: `${surname}${givenName}`,
       email: `user${id}@example.com`,
+      phone,
       role: ROLES[i % ROLES.length],
       status: STATUSES[i % STATUSES.length],
       createdAt: dateStr,
