@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { PaginatedData } from '../types/common.ts';
 import type { User, UserStatus, UserRole, CreateUserParams } from '../types/user.ts';
 import { getUserList, createUser, updateUser, deleteUser } from '../api/user.ts';
@@ -6,7 +6,7 @@ import { isValidPhone } from '../utils/validate.ts';
 import { Table, Pagination, Modal } from '../components/atom/index.ts';
 import type { Column } from '../components/atom/index.ts';
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 5;
 
 /** 角色 → 中文映射 */
 const ROLE_LABEL: Record<UserRole, string> = {
@@ -37,18 +37,14 @@ const STATUS_STYLE: Record<UserStatus, string> = {
 };
 
 /** 角色选项 */
-const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
-  { value: 'admin', label: '管理员' },
-  { value: 'editor', label: '编辑' },
-  { value: 'viewer', label: '访客' },
-];
+const ROLE_OPTIONS: { value: UserRole; label: string }[] = (
+  Object.entries(ROLE_LABEL) as [UserRole, string][]
+).map(([value, label]) => ({ value, label }));
 
 /** 状态选项 */
-const STATUS_OPTIONS: { value: UserStatus; label: string }[] = [
-  { value: 'active', label: '正常' },
-  { value: 'inactive', label: '停用' },
-  { value: 'banned', label: '封禁' },
-];
+const STATUS_OPTIONS: { value: UserStatus; label: string }[] = (
+  Object.entries(STATUS_LABEL) as [UserStatus, string][]
+).map(([value, label]) => ({ value, label }));
 
 /** 表单初始值 */
 const INITIAL_FORM: CreateUserParams = {
@@ -80,6 +76,66 @@ const UserListPage: React.FC = () => {
   // ----- 删除确认弹窗状态 -----
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // 使用 AbortController 取消过期请求
+  // fix: 用户快速切换筛选条件 / 翻页时，多个请求同时进行，后发起的请求可能先返回，导致显示数据与筛选条件不一致
+  const abortRef = useRef<AbortController | null>(null);
+
+  // ----- 新增/编辑弹窗 -----
+
+  /** 打开新增弹窗 */
+  const openCreateModal = () => {
+    setEditingUser(null);
+    setFormData(INITIAL_FORM);
+    setFormError(null);
+    setModalVisible(true);
+  };
+
+  /** 打开编辑弹窗 */
+  const openEditModal = useCallback((user: User) => {
+    setEditingUser(user);
+    setFormData({
+      username: user.username,
+      email: user.email,
+      phone: user.phone ?? '',
+      role: user.role,
+      status: user.status,
+    });
+    setFormError(null);
+    setModalVisible(true);
+  }, []);
+
+  /** 关闭弹窗 */
+  const closeModal = () => {
+    if (submitting) return;
+    setModalVisible(false);
+    setEditingUser(null);
+    setFormError(null);
+  };
+
+  // ----- 删除确认 -----
+
+  /** 打开删除确认 */
+  const openDeleteConfirm = useCallback((user: User) => {
+    setDeleteTarget(user);
+  }, []);
+
+  /** 确认删除 */
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await deleteUser(deleteTarget.id);
+      setDeleteTarget(null);
+      void fetchData();
+    } catch (err) {
+      // 删除失败仅打印日志，关闭弹窗
+      console.error('删除失败:', err);
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   // ----- 表格列定义（依赖组件内回调） -----
   const columns: Column<User>[] = useMemo(
@@ -135,31 +191,48 @@ const UserListPage: React.FC = () => {
         ),
       },
     ],
-    [], // eslint-disable-line react-hooks/exhaustive-deps -- 回调函数引用稳定
+    [openEditModal, openDeleteConfirm]
   );
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (pageOverride?: number) => {
+    // 取消上一个未完成的请求，避免竞态条件
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError(null);
     try {
       const res = await getUserList({
-        page,
+        page: pageOverride ?? page,
         pageSize: PAGE_SIZE,
         keyword: searchKeyword || undefined,
         status: statusFilter || undefined,
         sortField: sortOrder ? 'createdAt' : undefined,
         sortOrder: sortOrder || undefined,
-      });
+      }, controller.signal);
       setData(res.data);
-    } catch (err) {
+    } catch (err: unknown) {
+      // axios AbortSignal 取消或手动 abort() 均视为取消，忽略
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if ((err as any)?.code === 'ERR_CANCELED') return;
+      console.error('获取用户列表失败:', err);
       setError(err instanceof Error ? err.message : '请求失败');
     } finally {
-      setLoading(false);
+      // 仅当当前请求仍是最新请求时才更新 loading 状态，
+      // 防止被 abort 的旧请求的 finally 把 loading 错误置为 false
+      if (abortRef.current === controller) {
+        setLoading(false);
+      }
     }
   }, [page, searchKeyword, statusFilter, sortOrder]);
 
   useEffect(() => {
     void fetchData();
+    return () => {
+      // 组件卸载或依赖变化时取消进行中的请求
+      abortRef.current?.abort();
+    };
   }, [fetchData]);
 
   const handleSearch = () => {
@@ -167,63 +240,31 @@ const UserListPage: React.FC = () => {
     setPage(1);
   };
 
-  // ----- 新增/编辑弹窗 -----
-
-  /** 打开新增弹窗 */
-  const openCreateModal = () => {
-    setEditingUser(null);
-    setFormData(INITIAL_FORM);
-    setFormError(null);
-    setModalVisible(true);
-  };
-
-  /** 打开编辑弹窗 */
-  const openEditModal = (user: User) => {
-    setEditingUser(user);
-    setFormData({
-      username: user.username,
-      email: user.email,
-      phone: user.phone ?? '',
-      role: user.role,
-      status: user.status,
-    });
-    setFormError(null);
-    setModalVisible(true);
-  };
-
-  /** 关闭弹窗 */
-  const closeModal = () => {
-    if (submitting) return;
-    setModalVisible(false);
-    setEditingUser(null);
-    setFormError(null);
-  };
-
   /** 表单字段变更 */
-  const handleFormChange = (field: keyof CreateUserParams, value: string) => {
+  const handleFormChange = <K extends keyof CreateUserParams>(
+    field: K,
+    value: CreateUserParams[K],
+  ) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     if (formError) setFormError(null);
   };
 
+  const validateForm = (data: CreateUserParams): string | null => {
+  if (!data.username.trim()) return '请输入用户名';
+  if (!data.email.trim()) return '请输入邮箱';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email.trim())) return '请输入有效的邮箱地址';
+  if (data.phone && !isValidPhone(data.phone)) return '请输入有效的手机号';
+  return null;
+}
+
   /** 提交表单（新增 / 编辑） */
   const handleFormSubmit = async () => {
     // 表单校验
-    if (!formData.username.trim()) {
-      setFormError('请输入用户名');
-      return;
-    }
-    if (!formData.email.trim()) {
-      setFormError('请输入邮箱');
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-      setFormError('请输入有效的邮箱地址');
-      return;
-    }
-    if (formData.phone && !isValidPhone(formData.phone)) {
-      setFormError('请输入有效的手机号');
-      return;
-    }
+   const validationError = validateForm(formData);
+   if (validationError) { 
+     setFormError(validationError); 
+     return; 
+   }
 
     setSubmitting(true);
     setFormError(null);
@@ -235,35 +276,11 @@ const UserListPage: React.FC = () => {
       }
       closeModal();
       setPage(1);
-      void fetchData();
+      void fetchData(1);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : '操作失败');
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  // ----- 删除确认 -----
-
-  /** 打开删除确认 */
-  const openDeleteConfirm = (user: User) => {
-    setDeleteTarget(user);
-  };
-
-  /** 确认删除 */
-  const handleDeleteConfirm = async () => {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      await deleteUser(deleteTarget.id);
-      setDeleteTarget(null);
-      void fetchData();
-    } catch (err) {
-      // 删除失败仅打印日志，关闭弹窗
-      console.error('删除失败:', err);
-      setDeleteTarget(null);
-    } finally {
-      setDeleting(false);
     }
   };
 
@@ -273,6 +290,27 @@ const UserListPage: React.FC = () => {
     setSearchKeyword('');
     setPage(1);
   };
+
+  const modalFooter = useMemo(() => (
+    <>
+      <button
+        type="button"
+        className="rounded-lg border border-gray-200 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        onClick={closeModal}
+        disabled={submitting}
+      >
+        取消
+      </button>
+      <button
+        type="button"
+        className="rounded-lg bg-purple-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        onClick={() => void handleFormSubmit()}
+        disabled={submitting}
+      >
+        {submitting ? '保存中...' : '保存'}
+      </button>
+    </>
+  ), [submitting, closeModal, handleFormSubmit]);
 
   return (
     <main className="flex flex-1 flex-col p-8">
@@ -392,26 +430,7 @@ const UserListPage: React.FC = () => {
         title={editingUser ? '编辑用户' : '新增用户'}
         onClose={closeModal}
         loading={submitting}
-        footer={
-          <>
-            <button
-              type="button"
-              className="rounded-lg border border-gray-200 px-5 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={closeModal}
-              disabled={submitting}
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              className="rounded-lg bg-purple-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={() => void handleFormSubmit()}
-              disabled={submitting}
-            >
-              {submitting ? '保存中...' : '保存'}
-            </button>
-          </>
-        }
+        footer={modalFooter}
       >
         <div className="space-y-4">
           {/* 用户名 */}
@@ -463,7 +482,7 @@ const UserListPage: React.FC = () => {
             <select
               className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
               value={formData.role}
-              onChange={(e) => handleFormChange('role', e.target.value)}
+              onChange={(e) => handleFormChange('role', e.target.value as UserRole)}
               disabled={submitting}
             >
               {ROLE_OPTIONS.map((opt) => (
@@ -480,7 +499,7 @@ const UserListPage: React.FC = () => {
             <select
               className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700 outline-none transition-colors focus:border-purple-400 focus:ring-2 focus:ring-purple-100 cursor-pointer"
               value={formData.status}
-              onChange={(e) => handleFormChange('status', e.target.value)}
+              onChange={(e) => handleFormChange('status', e.target.value as UserStatus)}
               disabled={submitting}
             >
               {STATUS_OPTIONS.map((opt) => (
