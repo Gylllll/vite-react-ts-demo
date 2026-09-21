@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { PaginatedResponse, PaginatedData } from '../../types/common.ts';
-import type { User } from '../../types/user.ts';
+import type { PaginatedResponse } from '../../types/common.ts';
+import type { User, UserQueryParams } from '../../types/user.ts';
 import UserListPage from '../UserListPage.tsx';
+
+// 与 UserListPage 中的 PAGE_SIZE 保持一致
+const PAGE_SIZE = 5;
 
 // ---------------------------------------------------------------------------
 // hoisted mock functions (usable inside vi.mock factory)
@@ -44,13 +47,31 @@ function makeResponse(
   list: User[],
   total: number,
   page = 1,
-  pageSize = 10,
+  pageSize = PAGE_SIZE,
 ): PaginatedResponse<User> {
   return {
     code: 0,
     message: 'ok',
     data: { list, total, page, pageSize },
   };
+}
+
+/** 组件默认（无筛选/排序）时调用 getUserList 的查询参数 */
+function expectedQuery(overrides: Partial<UserQueryParams> = {}): UserQueryParams {
+  return {
+    page: 1,
+    pageSize: PAGE_SIZE,
+    keyword: undefined,
+    status: undefined,
+    sortField: undefined,
+    sortOrder: undefined,
+    ...overrides,
+  };
+}
+
+/** 取最近一次 getUserList 调用的第一个参数（查询参数对象） */
+function lastCallParams(): UserQueryParams {
+  return mockGetUserList.mock.calls.at(-1)?.[0] as UserQueryParams;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +91,7 @@ describe('UserListPage — 搜索逻辑', () => {
 
   describe('初始加载', () => {
     it('挂载时以默认 page=1, keyword=undefined 拉取数据', async () => {
-      const users = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
+      const users = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
       mockGetUserList.mockResolvedValueOnce(makeResponse(users, 25));
 
       render(<UserListPage />);
@@ -79,20 +100,16 @@ describe('UserListPage — 搜索逻辑', () => {
         expect(mockGetUserList).toHaveBeenCalledTimes(1);
       });
 
-      expect(mockGetUserList).toHaveBeenCalledWith({
-        page: 1,
-        pageSize: 10,
-        keyword: undefined,
-      });
+      expect(mockGetUserList.mock.calls[0][0]).toEqual(expectedQuery());
 
       // 数据已渲染到表格
       expect(screen.getByText('user_1')).toBeInTheDocument();
-      expect(screen.getByText('user_10@example.com')).toBeInTheDocument();
+      expect(screen.getByText(`user_${PAGE_SIZE}@example.com`)).toBeInTheDocument();
     });
 
-    it('挂载时展示 10 条用户数据', async () => {
-      const users = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
-      mockGetUserList.mockResolvedValueOnce(makeResponse(users, 10));
+    it('挂载时展示 5 条用户数据', async () => {
+      const users = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
+      mockGetUserList.mockResolvedValueOnce(makeResponse(users, PAGE_SIZE));
 
       render(<UserListPage />);
 
@@ -100,7 +117,7 @@ describe('UserListPage — 搜索逻辑', () => {
         expect(screen.getByText('user_1')).toBeInTheDocument();
       });
 
-      for (let i = 1; i <= 10; i++) {
+      for (let i = 1; i <= PAGE_SIZE; i++) {
         expect(screen.getByText(`user_${i}`)).toBeInTheDocument();
       }
     });
@@ -130,11 +147,7 @@ describe('UserListPage — 搜索逻辑', () => {
         expect(mockGetUserList).toHaveBeenCalledTimes(2);
       });
 
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 1,
-        pageSize: 10,
-        keyword: 'alice',
-      });
+      expect(lastCallParams()).toEqual(expectedQuery({ keyword: 'alice' }));
     });
 
     it('按 Enter 触发搜索', async () => {
@@ -155,18 +168,14 @@ describe('UserListPage — 搜索逻辑', () => {
         expect(mockGetUserList).toHaveBeenCalledTimes(2);
       });
 
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 1,
-        pageSize: 10,
-        keyword: 'bob',
-      });
+      expect(lastCallParams()).toEqual(expectedQuery({ keyword: 'bob' }));
     });
 
     it('搜索后 page 重置为 1（当前在第 3 页时搜索）', async () => {
-      const usersPage1 = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
-      const usersPage3 = Array.from({ length: 5 }, (_, i) => makeUser({ id: i + 21 }));
+      const usersPage1 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
+      const usersPage3 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 11 }));
 
-      // 初始加载 → 25 条数据, 3 页
+      // 初始加载 → 25 条数据, 5 页
       mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage1, 25));
       // 点击第 3 页
       mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage3, 25, 3));
@@ -186,11 +195,7 @@ describe('UserListPage — 搜索逻辑', () => {
       await waitFor(() => {
         expect(mockGetUserList).toHaveBeenCalledTimes(2);
       });
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 3,
-        pageSize: 10,
-        keyword: undefined,
-      });
+      expect(lastCallParams()).toEqual(expectedQuery({ page: 3 }));
 
       // 输入关键字搜索
       const input = screen.getByPlaceholderText('搜索用户名或邮箱');
@@ -203,16 +208,12 @@ describe('UserListPage — 搜索逻辑', () => {
       });
 
       // 第三次调用 page 应重置为 1，且携带 keyword
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 1,
-        pageSize: 10,
-        keyword: 'charlie',
-      });
+      expect(lastCallParams()).toEqual(expectedQuery({ page: 1, keyword: 'charlie' }));
     });
 
     it('输入仅含空格的 keyword 时，trim 后 searchKeyword 不变 → 不触发多余请求', async () => {
-      const users = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
-      mockGetUserList.mockResolvedValueOnce(makeResponse(users, 10));
+      const users = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
+      mockGetUserList.mockResolvedValueOnce(makeResponse(users, PAGE_SIZE));
 
       render(<UserListPage />);
 
@@ -290,11 +291,7 @@ describe('UserListPage — 搜索逻辑', () => {
       });
 
       // 清除后 keyword 为 undefined，page 为 1
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 1,
-        pageSize: 10,
-        keyword: undefined,
-      });
+      expect(lastCallParams()).toEqual(expectedQuery());
 
       // 搜索输入框已清空
       expect(input).toHaveValue('');
@@ -333,11 +330,7 @@ describe('UserListPage — 搜索逻辑', () => {
       });
 
       // 第二次调用同样使用原参数
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 1,
-        pageSize: 10,
-        keyword: undefined,
-      });
+      expect(lastCallParams()).toEqual(expectedQuery());
 
       // 数据渲染成功
       expect(screen.getByText('user_1')).toBeInTheDocument();
@@ -367,7 +360,7 @@ describe('UserListPage — 分页逻辑', () => {
 
       render(<UserListPage />);
 
-      // "第" 是分页组件特有的文本（"第 1-10 条 / 共 N 条"）
+      // "第" 是分页组件特有的文本（"第 1-5 条 / 共 N 条"）
       expect(screen.queryByText(/第.*条/)).not.toBeInTheDocument();
     });
 
@@ -384,7 +377,7 @@ describe('UserListPage — 分页逻辑', () => {
     });
 
     it('total > 0 时显示分页', async () => {
-      const users = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
+      const users = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
       mockGetUserList.mockResolvedValueOnce(makeResponse(users, 25));
 
       render(<UserListPage />);
@@ -393,12 +386,12 @@ describe('UserListPage — 分页逻辑', () => {
         expect(screen.getByText('user_1')).toBeInTheDocument();
       });
 
-      // 第 1-10 条 / 共 25 条
+      // 第 1-5 条 / 共 25 条
       expect(screen.getByText(/第.*条/)).toBeInTheDocument();
     });
 
-    it('数据跨多页时页码按钮正确渲染（共 25 条 → 3 页）', async () => {
-      const users = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
+    it('数据跨多页时页码按钮正确渲染（共 25 条 → 5 页）', async () => {
+      const users = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
       mockGetUserList.mockResolvedValueOnce(makeResponse(users, 25));
 
       render(<UserListPage />);
@@ -407,17 +400,17 @@ describe('UserListPage — 分页逻辑', () => {
         expect(screen.getByText('user_1')).toBeInTheDocument();
       });
 
-      // 应有页码 1, 2, 3
-      expect(screen.getByRole('button', { name: '1' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '2' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '3' })).toBeInTheDocument();
+      // 应有页码 1, 2, 3, 4, 5
+      for (const page of [1, 2, 3, 4, 5]) {
+        expect(screen.getByRole('button', { name: String(page) })).toBeInTheDocument();
+      }
     });
   });
 
   describe('翻页交互', () => {
     it('点击页码 → 以目标页和保持的 searchKeyword 请求', async () => {
-      const usersPage1 = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
-      const usersPage2 = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 11 }));
+      const usersPage1 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
+      const usersPage2 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 6 }));
 
       mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage1, 25));
       mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage2, 25, 2));
@@ -434,17 +427,13 @@ describe('UserListPage — 分页逻辑', () => {
         expect(mockGetUserList).toHaveBeenCalledTimes(2);
       });
 
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 2,
-        pageSize: 10,
-        keyword: undefined,
-      });
+      expect(lastCallParams()).toEqual(expectedQuery({ page: 2 }));
     });
 
     it('连续翻页 1→2→3 每次携带正确的 page 参数', async () => {
-      const p1 = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
-      const p2 = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 11 }));
-      const p3 = Array.from({ length: 5 }, (_, i) => makeUser({ id: i + 21 }));
+      const p1 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
+      const p2 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 6 }));
+      const p3 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 11 }));
 
       mockGetUserList
         .mockResolvedValueOnce(makeResponse(p1, 25))
@@ -470,27 +459,22 @@ describe('UserListPage — 分页逻辑', () => {
       });
 
       const calls = mockGetUserList.mock.calls;
-      expect(calls[0][0]).toEqual({ page: 1, pageSize: 10, keyword: undefined });
-      expect(calls[1][0]).toEqual({ page: 2, pageSize: 10, keyword: undefined });
-      expect(calls[2][0]).toEqual({ page: 3, pageSize: 10, keyword: undefined });
+      expect(calls[0][0]).toEqual(expectedQuery({ page: 1 }));
+      expect(calls[1][0]).toEqual(expectedQuery({ page: 2 }));
+      expect(calls[2][0]).toEqual(expectedQuery({ page: 3 }));
     });
 
     it('搜索后再翻页 → keyword 保持', async () => {
-      const emptyUsers: User[] = [];
-      const searchResultsPage2: User[] = [
-        makeUser({ id: 50, username: 'match50' }),
-        makeUser({ id: 51, username: 'match51' }),
-      ];
+      const searchPage1 = Array.from({ length: PAGE_SIZE }, (_, i) =>
+        makeUser({ id: i + 10, username: `match${i + 10}` }),
+      );
+      const searchPage2 = Array.from({ length: PAGE_SIZE }, (_, i) =>
+        makeUser({ id: i + 15, username: `match${i + 15}` }),
+      );
 
-      mockGetUserList.mockResolvedValueOnce(makeResponse(emptyUsers, 0)); // 初始
-      mockGetUserList.mockResolvedValueOnce(
-        makeResponse(
-          Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 10, username: `match${i + 10}` })),
-          25,
-          1,
-        ),
-      ); // 搜索第一页
-      mockGetUserList.mockResolvedValueOnce(makeResponse(searchResultsPage2, 25, 2)); // 搜索第二页
+      mockGetUserList.mockResolvedValueOnce(makeResponse([], 0)); // 初始
+      mockGetUserList.mockResolvedValueOnce(makeResponse(searchPage1, 25, 1)); // 搜索第一页
+      mockGetUserList.mockResolvedValueOnce(makeResponse(searchPage2, 25, 2)); // 搜索第二页
 
       render(<UserListPage />);
 
@@ -506,11 +490,7 @@ describe('UserListPage — 分页逻辑', () => {
       await waitFor(() => {
         expect(mockGetUserList).toHaveBeenCalledTimes(2);
       });
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 1,
-        pageSize: 10,
-        keyword: 'match',
-      });
+      expect(lastCallParams()).toEqual(expectedQuery({ keyword: 'match' }));
 
       // 翻到第 2 页
       await user.click(screen.getByRole('button', { name: '2' }));
@@ -520,34 +500,30 @@ describe('UserListPage — 分页逻辑', () => {
       });
 
       // keyword 保持为 'match'
-      expect(mockGetUserList).toHaveBeenLastCalledWith({
-        page: 2,
-        pageSize: 10,
-        keyword: 'match',
-      });
+      expect(lastCallParams()).toEqual(expectedQuery({ page: 2, keyword: 'match' }));
     });
   });
 
   describe('分页信息展示', () => {
-    it('第 1 页展示"第 1-10 条 / 共 25 条"', async () => {
-      const users = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
+    it('第 1 页展示"第 1-5 条 / 共 25 条"', async () => {
+      const users = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
       mockGetUserList.mockResolvedValueOnce(makeResponse(users, 25));
 
       render(<UserListPage />);
 
       await waitFor(() => {
-        expect(screen.getByText(/第 1-10 条 \/ 共 25 条/)).toBeInTheDocument();
+        expect(screen.getByText(/第 1-5 条 \/ 共 25 条/)).toBeInTheDocument();
       });
     });
 
     it('最后一页不足 pageSize 条时展示正确范围', async () => {
-      const usersPage1 = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
-      const usersPage3 = Array.from({ length: 5 }, (_, i) => makeUser({ id: i + 21 }));
+      const usersPage1 = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
+      const usersPage5 = Array.from({ length: 3 }, (_, i) => makeUser({ id: i + 21 }));
 
-      // 初始加载 → 25 条数据, 3 页
-      mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage1, 25));
-      // 点击第 3 页
-      mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage3, 25, 3));
+      // 初始加载 → 23 条数据, 5 页（最后一页 3 条）
+      mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage1, 23));
+      // 点击第 5 页
+      mockGetUserList.mockResolvedValueOnce(makeResponse(usersPage5, 23, 5));
 
       render(<UserListPage />);
 
@@ -555,16 +531,16 @@ describe('UserListPage — 分页逻辑', () => {
         expect(screen.getByText('user_1')).toBeInTheDocument();
       });
 
-      // 点击页码 3
-      await user.click(screen.getByRole('button', { name: '3' }));
+      // 点击页码 5
+      await user.click(screen.getByRole('button', { name: '5' }));
 
       // 等待新数据渲染 + 分页信息更新
       await waitFor(() => {
         expect(screen.getByText('user_21')).toBeInTheDocument();
       });
 
-      // 组件内部 page 状态已更新为 3，分页展示"第 21-25 条 / 共 25 条"
-      expect(screen.getByText(/第 21-25 条 \/ 共 25 条/)).toBeInTheDocument();
+      // 组件内部 page 状态已更新为 5，分页展示"第 21-23 条 / 共 23 条"
+      expect(screen.getByText(/第 21-23 条 \/ 共 23 条/)).toBeInTheDocument();
     });
 
     it('仅 1 条数据时展示"第 1-1 条 / 共 1 条"', async () => {
@@ -598,21 +574,17 @@ describe('UserListPage — 搜索 + 分页联动', () => {
 
   it('搜索 → 翻页 → 重新搜索 → 翻页（完整流程）', async () => {
     // --- Round 1: 初始加载 ---
-    const initial = Array.from({ length: 10 }, (_, i) => makeUser({ id: i + 1 }));
+    const initial = Array.from({ length: PAGE_SIZE }, (_, i) => makeUser({ id: i + 1 }));
     mockGetUserList.mockResolvedValueOnce(makeResponse(initial, 30));
 
     render(<UserListPage />);
     await waitFor(() => {
       expect(screen.getByText('user_1')).toBeInTheDocument();
     });
-    expect(mockGetUserList).toHaveBeenLastCalledWith({
-      page: 1,
-      pageSize: 10,
-      keyword: undefined,
-    });
+    expect(lastCallParams()).toEqual(expectedQuery({ page: 1 }));
 
     // --- Round 2: 搜索 'dev' ---
-    const searchResults = Array.from({ length: 10 }, (_, i) =>
+    const searchResults = Array.from({ length: PAGE_SIZE }, (_, i) =>
       makeUser({ id: i + 100, username: `dev_${i}` }),
     );
     mockGetUserList.mockResolvedValueOnce(makeResponse(searchResults, 22));
@@ -624,14 +596,10 @@ describe('UserListPage — 搜索 + 分页联动', () => {
     await waitFor(() => {
       expect(screen.getByText('dev_0')).toBeInTheDocument();
     });
-    expect(mockGetUserList).toHaveBeenLastCalledWith({
-      page: 1,
-      pageSize: 10,
-      keyword: 'dev',
-    });
+    expect(lastCallParams()).toEqual(expectedQuery({ page: 1, keyword: 'dev' }));
 
     // --- Round 3: 翻到第 2 页（keyword 保持 'dev'）---
-    const searchPage2 = Array.from({ length: 10 }, (_, i) =>
+    const searchPage2 = Array.from({ length: PAGE_SIZE }, (_, i) =>
       makeUser({ id: i + 200, username: `dev_p2_${i}` }),
     );
     mockGetUserList.mockResolvedValueOnce(makeResponse(searchPage2, 22, 2));
@@ -641,11 +609,7 @@ describe('UserListPage — 搜索 + 分页联动', () => {
     await waitFor(() => {
       expect(screen.getByText('dev_p2_0')).toBeInTheDocument();
     });
-    expect(mockGetUserList).toHaveBeenLastCalledWith({
-      page: 2,
-      pageSize: 10,
-      keyword: 'dev',
-    });
+    expect(lastCallParams()).toEqual(expectedQuery({ page: 2, keyword: 'dev' }));
 
     // --- Round 4: 搜索 'ops'（新 keyword，page 重置为 1）---
     const opsResults = Array.from({ length: 3 }, (_, i) =>
@@ -662,11 +626,7 @@ describe('UserListPage — 搜索 + 分页联动', () => {
       expect(screen.getByText('ops_0')).toBeInTheDocument();
     });
     // page 重置为 1，keyword 为 'ops'
-    expect(mockGetUserList).toHaveBeenLastCalledWith({
-      page: 1,
-      pageSize: 10,
-      keyword: 'ops',
-    });
+    expect(lastCallParams()).toEqual(expectedQuery({ page: 1, keyword: 'ops' }));
 
     // 共 3 条 → 仅 1 页，无分页
     expect(screen.queryByRole('button', { name: '2' })).not.toBeInTheDocument();
